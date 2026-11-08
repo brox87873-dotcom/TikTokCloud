@@ -1,0 +1,74 @@
+name: TikTok Cloud Mod Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: brew install insert_dylib
+
+      - name: Compile Cloud Mod
+        run: |
+          SDK=$(xcrun --sdk iphoneos --show-sdk-path)
+
+          xcrun --sdk iphoneos clang \
+            -dynamiclib \
+            -arch arm64 \
+            -isysroot "$SDK" \
+            -miphoneos-version-min=14.0 \
+            -fobjc-arc \
+            -framework UIKit \
+            -framework Foundation \
+            -install_name @rpath/CloudMod.dylib \
+            CloudMod/CloudMod.m \
+            -o CloudMod.dylib
+
+      - name: Inject into TikTok IPA
+        run: |
+          set -e
+
+          mkdir work
+          cd work
+
+          unzip -q ../TikTok.ipa
+
+          APP=$(find Payload -maxdepth 1 -name '*.app' -type d | head -1)
+
+          if [ -z "$APP" ]; then
+            echo "App not found"
+            exit 1
+          fi
+
+          EXE=$(/usr/libexec/PlistBuddy \
+            -c 'Print :CFBundleExecutable' "$APP/Info.plist")
+
+          mkdir -p "$APP/Frameworks"
+
+          cp ../CloudMod.dylib "$APP/Frameworks/CloudMod.dylib"
+
+          insert_dylib \
+            --inplace \
+            --all-yes \
+            '@executable_path/Frameworks/CloudMod.dylib' \
+            "$APP/$EXE"
+
+          cd ..
+
+          mkdir output
+
+          cd work
+          zip -qry ../output/TikTok-CloudMod.ipa Payload
+          cd ..
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: TikTok-CloudMod
+          path: output/TikTok-CloudMod.ipa
